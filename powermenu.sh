@@ -11,12 +11,6 @@ trap cleanup INT TERM EXIT
 
 MENU_JSON="$(dirname "$0")/config.json"
 
-if [ ! -f "$MENU_JSON" ]; then
-    echo "Error: $MENU_JSON Not Found!"
-    exit 1
-fi
-jq empty "$MENU_JSON" 2>/dev/null || { echo "Error: Invalid JSON In $MENU_JSON"; exit 1; }
-
 show_menu() {
     local title="$1"
     local is_main="$2"
@@ -108,6 +102,35 @@ show_menu() {
         fi
     done
 }
+
+if [ ! -f "$MENU_JSON" ] || ! jq empty "$MENU_JSON" 2>/dev/null; then
+    while true; do
+        show_menu "Main Menu" true "Config" "Exit"
+        choice=$?
+        
+        if [ $choice -eq 0 ]; then
+            clear
+            tput cnorm
+            
+            if [ ! -f "$MENU_JSON" ]; then
+                echo "{}" > "$MENU_JSON"
+            fi
+            
+            nano "$MENU_JSON"
+            
+            if jq empty "$MENU_JSON" 2>/dev/null; then
+                tput civis
+                break
+            else
+                echo "Error: Invalid JSON! Please Fix The File."
+                read -p "Press Enter To Edit Again Or Ctrl+C To Exit..."
+                tput civis
+            fi
+        else
+            cleanup
+        fi
+    done
+fi
 
 while true; do
     mapfile -t categories < <(jq -r 'keys_unsorted[]' "$MENU_JSON")
