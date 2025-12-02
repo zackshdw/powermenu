@@ -1,13 +1,21 @@
 #!/bin/bash
 
-echo -ne "\e[?25l"
+tput civis
 
 cleanup() {
-    echo -ne "\e[?25h"  
+    tput cnorm
     clear
     exit
 }
 trap cleanup INT TERM EXIT
+
+MENU_JSON="$(dirname "$0")/config.json"
+
+if [ ! -f "$MENU_JSON" ]; then
+    echo "Error: $MENU_JSON Not Found!"
+    exit 1
+fi
+jq empty "$MENU_JSON" 2>/dev/null || { echo "Error: Invalid JSON In $MENU_JSON"; exit 1; }
 
 show_menu() {
     local title="$1"
@@ -15,41 +23,83 @@ show_menu() {
     shift 2
     local options=("$@")
     local selected=0
-    local key
-
-    draw_menu() {
-        clear
-        echo "$title"
-        echo
-        for i in "${!options[@]}"; do
-            if [ "$i" -eq "$selected" ]; then
-                echo -e "\e[7m${options[i]}\e[0m"
-            else
-                echo "${options[i]}"
-            fi
-        done
-    }
 
     while true; do
-        draw_menu
-        IFS= read -rsn1 key
+        local term_width=$(tput cols)
+        local term_height=$(tput lines)
+        
+        local max_len=${#title}
+        for item in "${options[@]}"; do
+            (( ${#item} > max_len )) && max_len=${#item}
+        done
+        local box_width=$((max_len + 6))
+        ((box_width < 50)) && box_width=50
+        
+        local total_items=${#options[@]}
+        local box_height=$((total_items + 4))
+        
+        local pad_top=$(( (term_height - box_height) / 2 ))
+        (( pad_top < 0 )) && pad_top=0
+        
+        local pad_left=$(( (term_width - box_width) / 2 ))
+        (( pad_left < 0 )) && pad_left=0
+        
+        clear
+        
+        for ((i=0; i<pad_top; i++)); do
+            echo
+        done
+        
+        printf "%*s┌" $pad_left ""
+        printf '─%.0s' $(seq 1 $((box_width-2)))
+        echo "┐"
+        
+        local title_len=${#title}
+        local title_pad=$(( (box_width - 2 - title_len) / 2 ))
+        printf "%*s│%*s%s%*s│\n" $pad_left "" $title_pad "" "$title" $((box_width - 2 - title_len - title_pad)) ""
+        
+        printf "%*s│%*s│\n" $pad_left "" $((box_width - 2)) ""
+        
+        for i in "${!options[@]}"; do
+            local item="${options[$i]}"
+            local item_len=${#item}
+            local padding=$((box_width - 4 - item_len))
+            
+            printf "%*s│ " $pad_left ""
+            
+            if [ "$i" -eq "$selected" ]; then
+                tput rev
+                printf "%s" "$item"
+                tput sgr0
+            else
+                printf "%s" "$item"
+            fi
+            
+            printf "%*s │\n" $padding ""
+        done
+        
+        printf "%*s└" $pad_left ""
+        printf '─%.0s' $(seq 1 $((box_width-2)))
+        echo "┘"
+        
+        read -rsn1 key
+        
         if [[ $key == $'\x1b' ]]; then
             read -rsn2 -t 0.1 key2
-            key+=$key2
-            case "$key" in
-                $'\x1b[A') 
+            case "$key$key2" in
+                $'\x1b[A')
                     ((selected--))
-                    ((selected < 0)) && selected=$((${#options[@]}-1))
+                    ((selected < 0)) && selected=$((${#options[@]} - 1))
                     ;;
-                $'\x1b[B') 
+                $'\x1b[B')
                     ((selected++))
                     ((selected >= ${#options[@]})) && selected=0
                     ;;
-                $'\x1b') 
-                    if [ "$is_main" = true ]; then
+                $'\x1b')
+                    if [ "$is_main" = "true" ]; then
                         cleanup
                     else
-                        return -1 
+                        return 255
                     fi
                     ;;
             esac
@@ -59,44 +109,54 @@ show_menu() {
     done
 }
 
-main_menu_options=("System" "Utilities" "Exit")
 while true; do
-    show_menu "Main Menu" true "${main_menu_options[@]}"
+    mapfile -t categories < <(jq -r 'keys_unsorted[]' "$MENU_JSON")
+    
+    categories+=("Config")
+    categories+=("Exit")
+    
+    show_menu "Main Menu" true "${categories[@]}"
     main_choice=$?
-
-    case $main_choice in
-        0) 
-            system_options=("Logout" "Reboot" "Shutdown" "Back")
-            show_menu "System Menu" false "${system_options[@]}"
-            system_choice=$?
-            if [ $system_choice -eq -1 ]; then
-                continue  
-            fi
-            case $system_choice in
-                0) loginctl terminate-user "$USER" ;;
-                1) systemctl reboot ;;
-                2) systemctl poweroff ;;
-                3) continue ;;  
-            esac
-            ;;
-        1) 
-            utilities_options=("Update System" "Clean Cache" "Back")
-            show_menu "Utilities Menu" false "${utilities_options[@]}"
-            utilities_choice=$?
-            if [ $utilities_choice -eq -1 ]; then
-                continue  
-            fi
-            case $utilities_choice in
-                0) sudo apt update && sudo apt upgrade ;;
-                1) sudo apt clean ;;
-                2) continue ;; 
-            esac
-            ;;
-        2) 
-            cleanup
-            ;;
-        -1) 
-            cleanup
-            ;;
-    esac
+    
+    [ $main_choice -eq 255 ] && cleanup
+    
+    main_category="${categories[$main_choice]}"
+    
+    if [ "$main_category" = "Config" ]; then
+        clear
+        tput cnorm
+        nano "$MENU_JSON"
+        
+        if ! jq empty "$MENU_JSON" 2>/dev/null; then
+            echo "Error: Invalid JSON! Please Fix The File."
+            read -p "Press Enter To Edit Again Or Ctrl+C To Exit..."
+            continue
+        fi
+        
+        tput civis
+        continue
+    fi
+    
+    if [ "$main_category" = "Exit" ]; then
+        cleanup
+    fi
+    
+    mapfile -t items < <(jq -r --arg cat "$main_category" '.[$cat][] | .label' "$MENU_JSON")
+    mapfile -t commands < <(jq -r --arg cat "$main_category" '.[$cat][] | .command' "$MENU_JSON")
+    
+    items+=("Back")
+    
+    show_menu "$main_category Menu" false "${items[@]}"
+    item_choice=$?
+    
+    if [ $item_choice -eq 255 ] || [ $item_choice -eq $((${#items[@]} - 1)) ]; then
+        continue
+    fi
+    
+    clear
+    tput cnorm
+    eval "${commands[$item_choice]}"
+    echo
+    read -p "Press Enter To Continue..."
+    tput civis
 done

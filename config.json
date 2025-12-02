@@ -1,0 +1,26 @@
+{
+    "System": [
+        {
+            "label": "Logout",
+            "command": "loginctl terminate-user $USER"
+        },
+        {
+            "label": "Reboot",
+            "command": "systemctl reboot"
+        },
+        {
+            "label": "Shutdown",
+            "command": "systemctl poweroff"
+        }
+    ],
+    "Utilities": [
+        {
+            "label": "Update System",
+            "command": "clear && sudo apt update && sudo apt upgrade"
+        },
+        {
+            "label": "Clean Package Cache",
+            "command": "sudo apt clean"
+        }
+    ]
+}
